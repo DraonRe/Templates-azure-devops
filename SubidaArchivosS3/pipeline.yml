@@ -1,0 +1,15 @@
+stages:
+  - stage: cd
+    jobs:
+      - job:
+        displayName: CI / CD pipeline
+        steps:
+        - checkout: Template
+          persistCredentials: true
+        
+        - checkout: self
+          persistCredentials: true
+
+        - template: cd-s3-template.yml
+
+

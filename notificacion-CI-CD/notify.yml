@@ -1,0 +1,98 @@
+steps:
+  - task: Bash@3
+    displayName: 'Google Chat Alert'
+    condition: always()
+    inputs:
+      targetType: inline
+      script: |
+        #!/bin/bash
+        # Set variables from arguments
+
+        currentBranch=$(Build.SourceBranchName)
+        buildStatus=$(Agent.JobStatus)
+        buildId=$(Build.BuildId)
+        authorCommit=$(git log -1 --pretty=format:'%an' 2> /dev/null)
+        authorCommitEmail=$(git log -1 --pretty=format:'%ae' 2> /dev/null)
+        commitReference=$(git show -s --format='%h %s' 2> /dev/null)
+        jobName=$(Agent.JobName)  # Nombre del job actual
+        webHookUrl=$(webhook-url-microfront)
+        repositoryName=$(Build.Repository.Name)
+        repositoryGroupURL=$(azure-url)
+        stage=$(stage)
+
+        # Colores e imágenes según el estado del build
+        case "$buildStatus" in
+        "Succeeded") fontColor="#007E33" ; imageCard="https://img.icons8.com/fluency/240/ok--v1.png" ; spanish="Completado" ;;
+        "SucceededWithIssues") fontColor="#FF8800" ; imageCard="https://img.icons8.com/color/240/error--v1.png" ; spanish="Completado con problemas" ;;
+        "Failed") fontColor="#CC0000" ; imageCard="https://img.icons8.com/fluency/240/cancel.png" ; spanish="Falló" ;;
+        esac
+
+        body=$(cat << EOF
+        {
+          "cards": [
+            {
+              "header": {
+                "title": "Resultado Ejecución Pipeline ${stage} - Job: ${jobName}",
+                "subtitle": "${repositoryName}",
+                "imageUrl": "${imageCard}"
+              },
+              "sections": [
+                {
+                  "widgets": [
+                    {
+                      "textParagraph": {
+                        "text": "<p><font color=\"${fontColor}\">Pipeline ${spanish} en el job <strong>${jobName}</strong></font></p>"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Rama:",
+                        "content": "${currentBranch}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Commit:",
+                        "content": "${commitReference}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Autor:",
+                        "content": "${authorCommit} - ${authorCommitEmail}"
+                      }
+                    },
+                    {
+                      "keyValue": {
+                        "topLabel": "Estado del Job:",
+                        "content": "${spanish}"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "widgets": [
+                    {
+                      "buttons": [
+                        {
+                          "textButton": {
+                            "text": "Logs Ejecución",
+                            "onClick": {
+                              "openLink": {
+                                "url": "${repositoryGroupURL}/_build/results?buildId=${buildId}&view=results"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+        EOF
+        )
+
+        curl -s -X POST -H 'Content-Type: application/json' "${webHookUrl}" -d "$body"

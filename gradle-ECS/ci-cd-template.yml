@@ -1,0 +1,141 @@
+steps:
+
+### Additional properties that will be passed to the scanner,
+##### Put one key=value per line, example:
+### sonar.exclusions=**/*.bin
+##sonar.projectKey=pragma-asulado-poc_asulado-poc-autenticacion-back
+##sonar.projectName=asulado-poc-autenticacion-back
+##-----------------------------------
+
+#--------------------
+# - task: SonarCloudPrepare@2
+#   inputs:
+#     SonarCloud: 'SonarCloud'
+#     organization: 'asulado'
+#     scannerMode: 'Other'
+#     extraProperties: |
+#       sonar.projectKey=pragma-asulado-poc_$(Build.Repository.Name)
+#       sonar.projectName=$(Build.Repository.Name)
+#       sonar.branch.name=$(Build.SourceBranchName)
+#       sonar.scanner.metadataFilePath=$(Agent.TempDirectory)/sonar/$(Build.BuildNumber)/test/report-task.txt
+#   displayName: 'Sonarcloud Prepare'
+#-----------------------  
+
+- task: Gradle@2
+  displayName: 'gradlew build'
+  inputs:
+    gradleWrapperFile: "gradlew"
+    workingDirectory: '.'
+    tasks: ':$(MICROSERVICE):clean :$(MICROSERVICE):build jacocoTestReport'
+    gradleOptions: '-Xmx3072m'
+    javaHomeOption: 'JDKVersion'
+    jdkVersionOption: '$(JAVAVERSION)'
+    jdkArchitectureOption: 'x64'
+    continueOnError: false
+
+# Tarea de análisis de SonarCloud
+- task: SonarCloudPrepare@1
+  displayName: 'Prepare analysis on SonarCloud'
+  inputs:
+    SonarCloud: 'SonarCloud' # El nombre de la conexión de servicio a SonarCloud
+    organization: 'asulado' # Tu organización en SonarCloud
+    projectKey: 'pragma-asulado-poc_asulado-poc-autenticacion-back' # La clave del proyecto
+    projectName: 'asulado-poc-autenticacion-back' # Nombre del proyecto que aparecerá en SonarCloud
+    scannerMode: 'CLI'
+    configMode: 'manual'
+    cliProjectKey: 'pragma-asulado-poc_asulado-poc-autenticacion-back'
+    cliProjectName: 'asulado-poc-autenticacion-back'
+    extraProperties: |
+      sonar.java.binaries=$(Build.SourcesDirectory)/application/build/classes/java/main
+      sonar.coverage.jacoco.xmlReportPaths=$(Build.SourcesDirectory)/application/build/reports/jacoco/test/jacocoTestReport.xml # Ajusta según donde se genere tu reporte de Jacoco
+      sonar.exclusions=**/*.java
+
+# Tarea para ejecutar el análisis de SonarCloud
+- task: SonarCloudAnalyze@1
+  displayName: 'Run SonarCloud analysis'
+
+# Tarea para publicar los resultados de SonarCloud
+- task: SonarCloudPublish@1
+  displayName: 'Publish SonarCloud results'
+  inputs:
+    pollingTimeoutSec: '300'
+
+# - script: |
+#     echo "Checking for application-1.0-SNAPSHOT.jar:"
+#     ls -la $(Build.SourcesDirectory)/application/build/libs/ | grep application-1.0-SNAPSHOT.jar
+#   displayName: 'Check for JAR file'
+
+- script: |
+    ls -R -l
+  displayName: 'List de Result of Compile'
+    
+
+#Tarea para copiar los artefactos necesarios
+- task: CopyFiles@2
+  displayName: 'Copy JAR to Artifact Directory'
+  inputs:
+    SourceFolder: '$(Build.SourcesDirectory)/application/build/libs'
+    Contents: '**/*.jar'
+    TargetFolder: '$(Build.ArtifactStagingDirectory)'
+    CleanTargetFolder: true
+
+#Tarea para publicar el artefacto
+- task: PublishBuildArtifacts@1
+  displayName: 'Publish Artifact: JAR'
+  inputs:
+    PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+    ArtifactName: 'JAR'
+    publishLocation: 'Container'
+
+- task: Bash@3
+  displayName: 'List JAR files'
+  inputs:
+    targetType: 'inline'
+    script: |
+      ls -l $(Build.SourcesDirectory)/application/build/libs
+
+##----------------CD----------------
+
+- script: |
+    docker build -t $(REGISTRY_URI):$(TAG) .
+  workingDirectory: $(Build.SourcesDirectory)
+  displayName: 'Build Docker Image'
+
+##-------------------------------------------------------------
+#Prueba de uso Docker Bench for Security
+- script: |
+    docker run --net host --pid host --userns host --cap-add audit_control \
+    --label docker_bench_security \
+    -v /var/lib:/var/lib \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v /etc:/etc \
+    -v /usr/bin/docker-containerd:/usr/bin/docker-containerd \
+    docker/docker-bench-security > docker-bench-security-report.log
+  displayName: 'Run Docker Bench for Security'
+
+- task: PublishBuildArtifacts@1
+  inputs:
+    PathtoPublish: 'docker-bench-security-report.log'
+    ArtifactName: 'DockerBenchSecurityReport'
+  displayName: 'Publish Docker Bench Security Report'
+
+##----------------------------------------------------------------
+
+- task: AmazonWebServices.aws-vsts-tools.ECRPushImage.ECRPushImage@1
+  displayName: 'Push Image'
+  inputs:
+    awsCredentials: '$(AWS_CREDENTIALS)'
+    regionName: '$(REGION_NAME)'
+    sourceImageName: '$(REGISTRY_URI)'
+    sourceImageTag: '$(TAG)'
+    repositoryName: '$(REPOSITORY_VALUE)'
+    pushTag: '$(TAG)'
+
+- task: AWSCLI@1
+  displayName: 'Configure ECS'
+  inputs:
+    awsCredentials: '$(AWS_CREDENTIALS)'
+    regionName: 'us-east-1'
+    awsCommand: 'ecs'
+    awsSubCommand: 'update-service'
+    awsArguments: '--cluster $(CLUSTERNAME) --service $(SERVICE) --task-definition $(TASK_DEFINITION) --force-new-deployment'

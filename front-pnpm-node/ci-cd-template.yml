@@ -1,0 +1,119 @@
+steps:
+#-----------   CI ------------------    
+# Instalar Node.js v14
+- task: NodeTool@0
+  displayName: 'Instalar Node.js'
+  inputs:
+    versionSpec: $(nodeVersion)
+    checkLatest: false  # Desactivar la verificación de la última versión
+
+# Configurar pnpm con corepack
+- script: |
+    corepack enable
+    corepack prepare pnpm@latest-9 --activate
+  displayName: 'Configurar pnpm'
+
+# Instalar dependencias con pnpm
+- script: pnpm install
+  displayName: 'Instalar dependencias con pnpm'
+
+##--------------Prueba variables env --------------
+- task: DownloadSecureFile@1
+  name: envFile
+  displayName: 'Download asulado-poc-web.env'
+  inputs:
+    secureFile: 'asulado-poc-web.env'
+
+# Mover y renombrar el archivo .env
+- script: |
+    echo "Renaming downloaded file to .env"
+    mv "$(Agent.TempDirectory)/asulado-poc-web.env" "$(Build.SourcesDirectory)/.env"
+  displayName: "Rename asulado-poc-web.env to .env"
+
+# Listar archivos en el directorio de trabajo
+- script: |
+    echo "Listing files in the build sources directory:"
+    ls -la $(Build.SourcesDirectory)/
+  displayName: "List files in Build Sources Directory"
+
+
+# Lint con pnpm
+- script: pnpm lint
+  displayName: 'Lint con pnpm'
+
+# Generar pruebas con pnpm
+- script: pnpm test
+  displayName: 'Generar pruebas con pnpm'
+
+##------SonarCloud-----------
+# Tarea de análisis de SonarCloud
+- task: SonarCloudPrepare@1
+  displayName: 'Prepare analysis on SonarCloud'
+  inputs:
+    SonarCloud: 'SonarCloud-front'
+    organization: 'asulado'
+    projectKey: 'pragma-asulado-poc_asulado-poc-sistemapagos-front'
+    projectName: 'asulado-poc-sistemapagos-front'
+    scannerMode: 'CLI'
+    configMode: 'manual'
+    cliProjectKey: 'pragma-asulado-poc_asulado-poc-sistemapagos-front'
+    cliProjectName: 'asulado-poc-sistemapagos-front'
+    extraProperties: |
+      sonar.projectDescription=Pragma / Asulado / POC
+      sonar.sources=./src,./shared/react,./shared/utils
+      sonar.javascript.lcov.reportPaths=./coverage/lcov.info
+      sonar.exclusions=src/**/*.test.*,shared/react/**/*.test.*,shared/utils/**/*.test.*,shared/react/providers/services/__test__/test.utils.ts
+      sonar.scm.disabled=true
+      # sonar.sources=$(Build.SourcesDirectory)
+      # sonar.language=js
+      # sonar.sourceEncoding=UTF-8
+
+# Ejecutar el análisis
+- task: SonarCloudAnalyze@1
+  displayName: 'Run SonarCloud analysis'
+
+# Publicar resultados de SonarCloud
+- task: SonarCloudPublish@1
+  displayName: 'Publish SonarCloud results'
+  inputs:
+    pollingTimeoutSec: '300'
+##---------------------------  
+
+# Compilar con pnpm
+- script: |
+    echo "Ejecutando pnpm run build"
+    pnpm run build
+  displayName: 'Compilar con pnpm run build'
+
+
+# Listar archivos en el directorio build
+- script: 'ls -la $(Build.SourcesDirectory)/build'
+  displayName: 'Listar archivos en el directorio build'
+
+# Publicar el artefacto
+- task: PublishBuildArtifacts@1
+  displayName: 'Publicar artefacto: build'
+  inputs:
+    PathtoPublish: '$(Build.SourcesDirectory)/build'
+    ArtifactName: 'build'
+    publishLocation: 'Container'
+
+##-----------   CD ------------------    
+
+- task: AWSCLI@1
+  displayName: 'Sincronizar con S3'
+  inputs:
+    awsCredentials: '$(AWS_CREDENTIALS)'
+    regionName: 'us-east-1'
+    awsCommand: 's3'
+    awsSubCommand: 'sync'
+    awsArguments: '--delete ./build s3://$(bucket) --region us-east-1'
+
+- task: AWSCLI@1
+  displayName: 'Invalidar CloudFront'
+  inputs:
+    awsCredentials: '$(AWS_CREDENTIALS)'
+    regionName: 'us-east-1'
+    awsCommand: 'cloudfront'
+    awsSubCommand: 'create-invalidation'
+    awsArguments: '--distribution-id $(distribution) --paths "/*"'

@@ -1,0 +1,125 @@
+jobs:
+
+  - job: CI
+    steps:
+    - checkout: self
+
+    - template: notificacion-CI-CD/notificacion-inicio.yml@notificacion
+
+    # - bash: |
+    #     echo "CI implementation"
+    #   displayName: "CI"
+
+    # - task: SonarCloudPrepare@2
+    #   inputs:
+    #     SonarCloud: 'SonarCrezi'
+    #     organization: 'talentpool-1'
+    #     scannerMode: 'CLI'
+    #     extraProperties: |
+    #       sonar.projectKey=$(SONAR_PROJECT_KEY)
+    #       sonar.projectName=$(SONAR_PROJECT_NAME)
+    #       sonar.projectVersion = 1.0
+    #       sonar.language=java
+    #       sonar.sources=$(SONAR_CLI_SOURCES)/src/main
+    #       sonar.tests=$(SONAR_CLI_SOURCES)/src/test
+    #       sonar.exclusions=**/target/**, **/build/**, **/generated-sources/**, **/out/**, **/lib/**, **/libs/**, **/test/**, **/src/test/**, **/*.xml, **/*.yml, **/*.yaml, **/*.properties, **/*.sh, **/*.html, **/*.css, **/*.js
+    #       sonar.coverage.exclusions=**/generated-sources/**, **/src/main/resources/**, **/src/test/**, **/*.xml, **/*.properties
+    #       sonar.java.binaries=$(SONAR_CLI_SOURCES)/build/classes/java/main
+    #       sonar.java.test.binaries=$(SONAR_CLI_SOURCES)/build/classes/java/test
+    #       sonar.java.coveragePlugin=jacoco
+    #       sonar.coverage.jacoco.xmlReportPaths=$(SONAR_CLI_SOURCES)/build/jacocoxml/test/jacocoTestReport.xml
+    #       sonar.junit.reportPaths=$(SONAR_CLI_SOURCES)/build/test-results/test
+    #       sonar.scm.disabled=true        
+
+    - task: Gradle@2
+      displayName: 'gradlew build'
+      inputs:
+        gradleWrapperFile: "gradlew"
+        workingDirectory: '.'
+        tasks: ':$(MICROSERVICE):clean :$(MICROSERVICE):build'
+        gradleOptions: '-Xmx3072m'
+        javaHomeOption: 'JDKVersion'
+        jdkVersionOption: '$(JAVAVERSION)'
+        jdkArchitectureOption: 'x64'
+        continueOnError: false
+
+    - script: |
+        echo "Checking for application-1.0-SNAPSHOT.jar:"
+        ls -la $(Build.SourcesDirectory)/application/build/libs/ | grep application-1.0-SNAPSHOT.jar
+      displayName: 'Check for JAR file'
+
+    - script: |
+        ls -R -l
+      displayName: 'List de Result of Compile'
+        
+    # - task: SonarCloudAnalyze@2
+    #   inputs:
+    #     jdkversion: 'JAVA_HOME_17_X64'
+    #   continueOnError: true
+
+    #Tarea para copiar los artefactos necesarios
+    - task: CopyFiles@2
+      displayName: 'Copy JAR to Artifact Directory'
+      inputs:
+        SourceFolder: '$(Build.SourcesDirectory)/application/build/libs'
+        Contents: '**/*.jar'
+        TargetFolder: '$(Build.ArtifactStagingDirectory)'
+        CleanTargetFolder: true
+
+    #Tarea para publicar el artefacto
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifact: JAR'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'JAR'
+        publishLocation: 'Container'
+
+    - task: Bash@3
+      displayName: 'List JAR files'
+      inputs:
+        targetType: 'inline'
+        script: |
+          ls -l $(Build.SourcesDirectory)/application/build/libs
+
+##------------CD Prueba----------
+
+    - script: |
+        docker build -t $(REGISTRY_URI):$(TAG) .
+      workingDirectory: $(Build.SourcesDirectory)
+      displayName: 'Build Docker Image'
+
+##-------------------------------------------------------------
+##Prueba de uso Docker Bench for Security
+    # - script: |
+    #     docker run -it --net host --pid host --userns host --cap-add audit_control \
+    #     --label docker_bench_security \
+    #     -v /var/lib:/var/lib \
+    #     -v /var/run/docker.sock:/var/run/docker.sock \
+    #     -v /etc:/etc \
+    #     -v /usr/bin/docker-containerd:/usr/bin/docker-containerd \
+    #     docker/docker-bench-security
+    #   displayName: 'Run Docker Bench for Security'
+##----------------------------------------------------------------
+
+    - task: AmazonWebServices.aws-vsts-tools.ECRPushImage.ECRPushImage@1
+      displayName: 'Push Image'
+      inputs:
+        awsCredentials: '$(AWS_CREDENTIALS)'
+        regionName: '$(REGION_NAME)'
+        sourceImageName: '$(REGISTRY_URI)'
+        sourceImageTag: '$(TAG)'
+        repositoryName: '$(REPOSITORY_VALUE)'
+        pushTag: '$(TAG)'
+
+    - task: AWSCLI@1
+      displayName: 'Configure ECS'
+      inputs:
+        awsCredentials: '$(AWS_CREDENTIALS)'
+        regionName: 'us-east-1'
+        awsCommand: 'ecs'
+        awsSubCommand: 'update-service'
+        awsArguments: '--cluster $(CLUSTERNAME) --service $(SERVICE) --task-definition $(TASK_DEFINITION) --force-new-deployment'
+
+
+
+    - template: notificacion-CI-CD/notify.yml@notificacion

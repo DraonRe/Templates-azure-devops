@@ -1,0 +1,50 @@
+jobs:
+
+  - job: CD
+    dependsOn: CI
+
+    steps:
+      - template: notificacion-CI-CD/notificacion-inicio.yml@notificacion
+
+      # - script: |
+      #     cp $(Build.SourcesDirectory)/application/build/libs/application-1.0-SNAPSHOT.jar $(Build.SourcesDirectory)/app.jar
+      #   displayName: 'Copy JAR to Docker Context'
+
+      - script: |
+          docker build -t $(REGISTRY_URI):$(TAG) .
+        workingDirectory: $(Build.SourcesDirectory)
+        displayName: 'Build Docker Image'
+
+##-------------------------------------------------------------
+##Prueba de uso Docker Bench for Security
+      # - script: |
+      #     docker run -it --net host --pid host --userns host --cap-add audit_control \
+      #     --label docker_bench_security \
+      #     -v /var/lib:/var/lib \
+      #     -v /var/run/docker.sock:/var/run/docker.sock \
+      #     -v /etc:/etc \
+      #     -v /usr/bin/docker-containerd:/usr/bin/docker-containerd \
+      #     docker/docker-bench-security
+      #   displayName: 'Run Docker Bench for Security'
+##----------------------------------------------------------------
+
+      - task: AmazonWebServices.aws-vsts-tools.ECRPushImage.ECRPushImage@1
+        displayName: 'Push Image'
+        inputs:
+          awsCredentials: '$(AWS_CREDENTIALS)'
+          regionName: '$(REGION_NAME)'
+          sourceImageName: '$(REGISTRY_URI)'
+          sourceImageTag: '$(TAG)'
+          repositoryName: '$(REPOSITORY_VALUE)'
+          pushTag: '$(TAG)'
+
+      - task: AWSCLI@1
+        displayName: 'Configure ECS'
+        inputs:
+          awsCredentials: '$(AWS_CREDENTIALS)'
+          regionName: 'us-east-1'
+          awsCommand: 'ecs'
+          awsSubCommand: 'update-service'
+          awsArguments: '--cluster $(CLUSTERNAME) --service $(SERVICE) --task-definition $(TASK_DEFINITION) --force-new-deployment'
+
+      - template: notificacion-CI-CD/notify.yml@notificacion

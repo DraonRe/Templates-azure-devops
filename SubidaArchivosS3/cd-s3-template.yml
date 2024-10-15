@@ -1,0 +1,18 @@
+steps:
+  # Realizar el checkout del repositorio
+  - checkout: self
+    displayName: 'Realizar el checkout del repositorio'
+
+  # Verificar que la carpeta "archivos" existe en el repositorio
+  - script: ls -la ./pragma-talento-static-files-s3
+    displayName: 'Listar contenido de pragma-talento-static-files-s3'
+
+  # Subir archivos a un bucket
+  - task: AWSCLI@1
+    displayName: 'Sincronizar con S3'
+    inputs:
+      awsCredentials: '$(AWS_CREDENTIALS)'
+      regionName: 'us-east-1'
+      awsCommand: 's3'
+      awsSubCommand: 'sync'
+      awsArguments: './pragma-talento-static-files-s3/archivos s3://$(bucket)/static-files --region us-east-1'

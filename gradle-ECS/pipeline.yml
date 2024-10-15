@@ -1,0 +1,6 @@
+stages:
+ - stage: Deploy_backend
+   displayName: 'Deploy back'
+   jobs:
+     - template: ci/ci.yml
+#     - template: cd/cd.yml

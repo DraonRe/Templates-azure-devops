@@ -1,0 +1,47 @@
+trigger:
+  branches:
+  #Puedes validar las ramas a las que va dirigido el pipeline
+    include:
+      - develop
+      - desarrollo
+      - main
+      - master
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+#En esta seccion podras organizar que dependiendo de la rama correspondiente use el grupo de variables especifico para la rama  
+variables:
+   - name: BRANCH_NAME
+     value: $[replace(variables['Build.SourceBranch'], 'refs/heads/', '')]
+   - ${{ if or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.SourceBranch'], 'refs/heads/master')) }}:
+     - group: variables-pdn #Cambiar el grupo de variables para main
+
+   - ${{ elseif or(eq(variables['Build.SourceBranch'], 'refs/heads/develop'), eq(variables['Build.SourceBranch'], 'refs/heads/desarrollo')) }}:
+     - group: variables-dev #Cambiar el grupo de variables para dev
+
+   - ${{ else }}:
+     - group: variables-dev
+
+  # Agrega el grupo de variables notify - debes validar que este creada en la libreria
+   - group: notify
+ 
+# En esta seccion puedes definir los repositorios que se utilizaran para el pipeline
+resources:
+  repositories:
+    - repository: plantillas
+      name: PragmaSolicitudes-Frontend/pragma-talento-pipelines # Se debe ajustar dependiendo del azure devops y la organizacion que use
+      type: git
+
+# En esta seccion puedes definir los jobs que se utilizaran para el pipeline y el orden de ejecucion con sus
+# respectivos templates
+stages:
+- stage: Deploy_Solicitudes_Frontend
+  displayName: 'Ejecutar Deploy vacaciones-pragma-app CI/CD'
+  jobs:
+    - job: Deploy
+      displayName: Despliegue
+      steps:
+        - template: notificacion-chat/notificacion-inicio.yml@plantillas #template apuntando a la notificacion de inicio
+        - template: front-yarn-react/ci-cd-template.yml@plantillas # debes ubicar la carpeta que usaras
+        - template: notificacion-chat/notify.yml@plantillas # template apuntando a la notificacion final

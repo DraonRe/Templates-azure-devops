@@ -1,0 +1,98 @@
+steps:
+#-----------   CI ------------------    
+#Tarea de gradlew version de java 1.8 - clean - build
+- task: Gradle@3
+  displayName: 'Build'
+  inputs:
+    gradleWrapperFile: 'gradlew'
+    workingDirectory: ''
+    tasks: 'clean build'
+    javaHomeOption: 'JDKVersion'
+    jdkVersionOption: $(javaVersion)
+    jdkArchitectureOption: 'x64'
+    options: '-x test'    
+    sonarQubeRunAnalysis: false
+    spotBugsAnalysis: false
+
+#Tarea para copiar los artefactos necesarios
+- task: CopyFiles@2
+  displayName: 'Copy JAR to Artifact Directory'
+  inputs:
+    SourceFolder: '$(System.DefaultWorkingDirectory)/build/libs'
+    Contents: '**/*.jar'
+    TargetFolder: '$(Build.ArtifactStagingDirectory)'
+    CleanTargetFolder: true
+
+#Tarea para publicar el artefacto
+- task: PublishBuildArtifacts@1
+  displayName: 'Publish Artifact: JAR'
+  inputs:
+    PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+    ArtifactName: 'JAR'
+    publishLocation: 'Container'
+
+
+##-----------   CD ------------------   
+# Iniciar sesión en Amazon ECR
+- task: AWSCLI@1
+  displayName: 'ECR Login'
+  inputs:
+    awsCredentials: '$(awsServiceConnection)'
+    regionName: $(awsRegion)
+    awsCommand: 'ecr'
+    awsSubCommand: 'get-login-password'
+    awsArguments: '--region $(awsRegion)'
+
+# Construir la imagen Docker
+- task: Docker@2
+  displayName: 'Build Docker Image'
+  inputs:
+    repository: '$(ecrRegistry)/$(imageName)'
+    command: 'build'
+    Dockerfile: '$(dockerFileName)'
+    buildContext: '.'
+    tags: '$(imageTag)'
+
+# Listar las imágenes de Docker (opcional)
+- script: |
+    docker images
+  displayName: 'List Docker Images'
+
+# Publicar la imagen a ECR
+- task: ECRPushImage@1
+  displayName: 'ECR Push Image'
+  inputs:
+    awsCredentials: '$(awsServiceConnection)'
+    regionName: 'us-east-1'
+    imageSource: 'imagename'
+    sourceImageName: '$(ecrRegistry)/$(imageName)'
+    sourceImageTag: '$(imageTag)'
+    repositoryName: '$(imageName)'
+    pushTag: '$(imageTag)'
+    
+# Configurar el contexto de kubectl para EKS
+- task: AWSCLI@1
+  displayName: 'Configure kubectl for EKS'
+  inputs:
+    awsCredentials: '$(awsServiceConnection)'
+    regionName: 'us-east-1'
+    awsCommand: 'eks'
+    awsSubCommand: 'update-kubeconfig'
+    awsArguments: '--name $(eksClusterName) --region $(awsRegion)'
+
+- task: AWSShellScript@1
+  displayName: 'Restart Deployment in Kubernetes'
+  inputs:
+    awsCredentials: '$(awsServiceConnection)'
+    regionName: 'us-east-1'
+    scriptType: 'inline'
+    inlineScript: |
+      set -e
+      # Verificar el contexto actual de kubectl
+        echo "Obteniendo el contexto actual de kubectl..."
+        kubectl config current-context
+      
+      # Restart deployment in Kubernetes
+        echo "Restarting deployment in Kubernetes..."
+        kubectl rollout restart deployment $(deploymentName) -n $(namespace)
+        echo "Fin de la tarea AWSShellScript"
